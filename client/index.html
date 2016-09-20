@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://npmcdn.com/babel-core@5.8.38/browser.min.js"></script>
+    <script type="text/babel" >
+        "use strict";
+
+        // GLOBALS
+        var dragging=false,lineWidth,strokeStyle,fillStyle;
+        var currentTool, origin, topCanvas, topCtx, gradientStyle, radialStyle;
+        var strokeGradStyle, strokeRadStyle;
+        var rectX, rectY, rectW, rectH;
+        var lastTimeUpdated;
+
+        // CONSTANTS
+        var DEFAULT_LINE_WIDTH = 3;
+        var DEFAULT_STROKE_STYLE = "black";
+        var DEFAULT_FILL_STYLE = "rgba(0, 0, 0, 0)"; 
+        var TOOL_PENCIL = "toolPencil";
+        var TOOL_RECTANGLE = "toolRectangle";
+        var TOOL_LINE = "toolLine";
+    
+        let canvas;
+        let ctx;
+        let socket;
+
+        //const user = `user${(Math.floor((Math.random()*1000))+1)}`;
+        //let draws = {};
+
+        let sendBufferCanvas;
+        let sendBufferCtx;
+        
+        const setup = () => {
+          sendBufferCanvas = document.querySelector('#mainCanvas');
+          //sendBufferCanvas = document.createElement("canvas");
+          sendBufferCanvas.height = 500;
+          sendBufferCanvas.width = 700;
+          sendBufferCtx = sendBufferCanvas.getContext("2d");
+          
+          const time = new Date().getTime();
+          
+          lastTimeUpdated = time;
+          
+          const data = {
+            x: 0,
+            y: 0,
+            height: 500,
+            width: 700,
+            imgData: sendBufferCanvas.toDataURL(),
+            lastUpdate: time
+          };
+          
+          socket.emit("draw", data);
+        };
+
+        const handleMessage = (data) => {
+          console.log("In handle");
+          console.log(data.lastUpdate);
+          console.log(lastTimeUpdated);
+          
+          if(data.lastUpdate >= lastTimeUpdated){
+            let image = new Image();
+
+            image.onload = () => {
+              ctx.save();
+              ctx.globalCompositeOperation = "source-over";
+              ctx.drawImage(image, data.x, data.y, data.width, data.height);
+              ctx.restore();
+            };
+
+            image.src = data.imgData;
+            
+            lastTimeUpdated = data.lastUpdate;
+          }
+        };
+
+        setInterval( () => {
+         if(dragging){
+          update(); 
+         }
+        }, 100);
+
+        const update = () => {
+           
+          const time = new Date().getTime();
+
+          const data = {
+            x: 0,
+            y: 0,
+            height: 500,
+            width: 700,
+            imgData: canvas.toDataURL(),
+            lastUpdate: time
+          };
+
+          socket.emit("draw", data);
+        };
+
+        const init = () => {
+
+          // initialize some globals
+          canvas = document.querySelector('#mainCanvas');
+          ctx = canvas.getContext('2d');
+          
+          socket = io.connect();
+		  
+		  socket.on('connect', () => {
+		    setup();
+		  });
+		  
+		  socket.on('updated', (data) => {
+            handleMessage(data);
+          });
+          
+          lineWidth = DEFAULT_LINE_WIDTH;
+          strokeStyle = DEFAULT_STROKE_STYLE;
+          fillStyle = DEFAULT_FILL_STYLE;
+          currentTool = TOOL_PENCIL;
+          origin = {};
+          topCanvas = document.querySelector('#topCanvas');
+          topCtx = topCanvas.getContext('2d');
+
+          // set initial properties of the graphics context
+          ctx.lineWidth = lineWidth;
+          ctx.strokeStyle = strokeStyle;
+          ctx.fillStyle = fillStyle;
+          ctx.lineCap = "round"; // "butt", "round", "square" (default "butt")
+          ctx.lineJoin = "round"; // "round", "bevel", "miter" (default "miter")
+          topCtx.lineWidth = ctx.lineWidth = lineWidth;
+          topCtx.strokeStyle = ctx.strokeStyle = strokeStyle;
+          topCtx.fillStyle = ctx.fillStyle = fillStyle;
+          topCtx.lineCap = ctx.lineCap = "round";
+          topCtx.lineJoin = ctx.lineJoin = "round";
+
+          drawGrid(ctx, 'lightgray', 10, 10);
+
+          // Hook up event listeners
+          canvas.onmousedown = doMousedown;
+          canvas.onmousemove = doMousemove;
+          canvas.onmouseup = doMouseup;
+          canvas.onmouseout = doMouseout;
+          //silly old IE
+          topCanvas.onmousedown = doMousedown;
+          topCanvas.onmousemove = doMousemove;
+          topCanvas.onmouseup = doMouseup;
+          topCanvas.onmouseout = doMouseout;
+
+          document.querySelector('#lineWidthChooser').onchange = doLineWidthChange;
+          document.querySelector('#strokeStyleChooser').onchange = doStrokeStyleChange;
+          document.querySelector('#clearButton').addEventListener("click", doClear);
+          document.querySelector('#exportButton').addEventListener("click", doExport);
+          document.querySelector('#fillColorChooser').onchange = doFillColorChange;
+          document.querySelector('#toolChooser').onchange = function(e)
+          {
+              currentTool = e.target.value;
+              console.log("Current Tool: " + currentTool);
+          }
+          
+          
+        };
+        
+        window.onload = init;
+
+        // FUNCTIONS
+
+        // EVENT CALLBACK FUNCTIONS
+        /*function doMousedown(e){
+            console.log(e.type);
+
+            dragging = true;
+
+            // get location of mouse in canvas coordinates
+            var mouse = getMouse(e);
+
+            // pencil tool
+            ctx.beginPath();
+            // move pen to x,y of mouse
+            ctx.moveTo(mouse.x, mouse.y);
+        }*/
+        function doMousedown(e)
+        {
+            dragging = true;
+            var mouse = getMouse(e);
+
+            switch(currentTool)
+            {
+            case TOOL_PENCIL:
+                ctx.beginPath();
+                ctx.moveTo(mouse.x, mouse.y);
+                break;
+            case TOOL_RECTANGLE:
+                topCtx.globalAlpha = 0.3;
+                origin.x = mouse.x;
+                origin.y = mouse.y;
+                break;
+            case TOOL_LINE:
+                origin.x = mouse.x;
+                origin.y = mouse.y;
+                break;
+            }
+        }
+
+        /*function doMousemove(e) {
+            // bail out if the mouse button is not down
+            if(! dragging) return;
+
+            // get location of mouse in canvas coordinates
+            var mouse = getMouse(e);
+
+            // PENCIL TOOL
+            ctx.strokeStyle = strokeStyle;
+            ctx.lineWidth = lineWidth;
+            ctx.lineTo(mouse.x, mouse.y);
+            ctx.stroke();		
+        }*/
+        function doMousemove(e)
+        {
+            // bail out if the mouse button is not down
+            if(!dragging) return;
+            // get location of mouse in canvas coordinates
+            var mouse = getMouse(e);
+            switch(currentTool) 
+            {
+            case TOOL_PENCIL:
+                // set ctx.strokeStyle and ctx.lineWidth to correct values
+                if(strokeStyle == "grad")
+                {
+                    setGradient(0, 0, canvas.width, 0)
+                }
+                else if(strokeStyle == "radialGrad")
+                {
+                    setRadialGradient(canvas.width/2, canvas.height/2, 20, canvas.width/2, canvas.height/2, 300)
+                }
+                ctx.strokeStyle = strokeStyle;
+                ctx.lineWidth = lineWidth;
+                // draw a line to x,y of mouse
+                ctx.lineTo(mouse.x, mouse.y);
+                // stroke the line
+                ctx.stroke();
+                break;
+            case TOOL_RECTANGLE:
+                var x = Math.min(mouse.x,origin.x);
+                var y = Math.min(mouse.y,origin.y);
+                var w = Math.abs(mouse.x - origin.x);
+                var h = Math.abs(mouse.y - origin.y);
+
+                //set the stroke style with a gradient
+                if(strokeGradStyle)
+                {
+                    setGradient(x, y, x + w, y)
+                }
+                else if(strokeRadStyle)
+                {
+                    setRadialGradient(x, y, 0, x, y, Math.sqrt( (w)*(w) + (h)*(h)))
+                }
+
+                topCtx.strokeStyle = strokeStyle;
+
+                topCtx.lineWidth = lineWidth;
+                // erase old rectangle
+                clearTopCanvas()
+                // draw new rectangle
+                //set the fill style with gradient
+                if(gradientStyle)
+                {
+                    setFillGradient(x, y, x + w, y)
+                }
+                else if(radialStyle)
+                {
+                    setFillRadialGradient( (x + w)/2, (y +h)/2, 0, (x + w)/2, (y +h)/2, Math.sqrt( (w)*(w) + (h)*(h))/2)
+                }
+                topCtx.fillStyle = fillStyle;
+                topCtx.fillRect(x,y,w,h);
+                topCtx.strokeRect(x,y,w,h);
+                rectX = x;
+                rectY = y;
+                rectW = w;
+                rectH = h;
+                break;
+            case TOOL_LINE:
+                if(strokeStyle == "grad")
+                {
+                    setGradient(0, 0, canvas.width, 0)
+                }
+                else if(strokeStyle == "radialGrad")
+                {
+                    setRadialGradient(canvas.width/2, canvas.height/2, 20, canvas.width/2, canvas.height/2, 300)
+                }
+                topCtx.beginPath();
+                topCtx.moveTo(origin.x , origin.y);
+                topCtx.strokeStyle = strokeStyle;
+                topCtx.fillStyle = fillStyle;
+                topCtx.lineWidth = lineWidth;
+
+                clearTopCanvas()
+                topCtx.lineTo(mouse.x, mouse.y);
+                topCtx.stroke();
+                topCtx.closePath();
+                break;
+            }
+        }
+
+        /*function doMouseup(e) {
+            console.log(e.type);
+
+            // stop drawing
+            dragging = false;
+            ctx.closePath();
+        }*/
+        function doMouseup(e) 
+        {
+            var mouse = getMouse(e);
+            switch(currentTool) 
+            {
+            case TOOL_PENCIL:
+                ctx.closePath();
+                break;
+            case TOOL_LINE:
+            case TOOL_RECTANGLE:
+            if(dragging)
+                {
+                    topCtx.globalAlpha = 1;
+                    topCtx.fillRect(rectX, rectY, rectW, rectH);
+                    topCtx.strokeRect(rectX, rectY, rectW, rectH);
+                    ctx.drawImage(topCanvas,0,0);
+                    clearTopCanvas()
+                }
+                //break;
+
+                // draw a line to x,y of mouse
+                //ctx.lineTo(mouse.x, mouse.y);
+                // stroke the line
+                //ctx.stroke();
+                break;
+            }
+            dragging = false;
+            update();
+        }
+
+        /*// if the user drags out of the canvas
+        function doMouseout(e) {
+            console.log(e.type);
+
+            // stop drawing
+            dragging = false;
+            ctx.closePath();
+        }*/
+        // if the user drags out of the canvas
+        function doMouseout(e) 
+        {
+            switch(currentTool) 
+            {
+            case TOOL_PENCIL:
+                ctx.closePath();
+                break;
+            case TOOL_RECTANGLE:
+            case TOOL_LINE:
+                // cancel the drawing
+                clearTopCanvas()
+                break;
+            }
+            dragging = false;
+        }
+
+        function clearTopCanvas()
+            {
+                topCtx.clearRect(0,0,topCtx.canvas.width,topCtx.canvas.height);		}
+
+        function doClear(){
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            topCtx.clearRect(0,0,topCtx.canvas.width,topCtx.canvas.height);
+            drawGrid(ctx,'lightgray', 10, 10);
+        }
+
+        function doExport(){
+            // open a new window and load the image in it
+            // http://www.w3schools.com/jsref/met_win_open.asp
+            var data = canvas.toDataURL(); 
+            var windowName = "canvasImage";
+            var windowOptions = "left=0,top=0,width=" + canvas.width + ",height=" + canvas.height +",toolbar=0,resizable=0";
+            var myWindow = window.open(data,windowName,windowOptions);
+            myWindow.resizeTo(canvas.width,canvas.height); // needed so Chrome would display image
+         }
+
+        function doLineWidthChange(e)
+         {
+            lineWidth = e.target.value;
+         }
+
+        function doStrokeStyleChange(e)
+        {
+            //the code for study guide 2
+            if(e.target.value == "Gradient")
+                    {
+                        strokeStyle = "grad";
+                        strokeGradStyle = true;
+                        strokeRadStyle = false;
+                    }
+                    else if (e.target.value == "Radial Gradient")
+                    {
+                        strokeStyle = "radialGrad";
+                        strokeGradStyle = false;
+                        strokeRadStyle = true;
+                    }
+                    else
+                    {
+                        strokeStyle = e.target.value;
+                        strokeGradStyle = false;
+                        strokeRadStyle = false;
+                    }
+        }
+
+        function doFillColorChange(e)
+        {
+            if(e.target.value == "Alphazero")
+            {
+                fillStyle = "rgba(0, 0, 0, 0)";
+                gradientStyle = false;
+                radialStyle = false;
+            }
+            else if(e.target.value == "Gradient")
+            {
+                gradientStyle = true;
+                radialStyle = false;
+            }
+            else if(e.target.value == "Radial Gradient")
+            {
+                gradientStyle = false;
+                radialStyle = true;
+            }
+            else
+            {
+                fillStyle = e.target.value;
+                gradientStyle = false;
+                radialStyle = false;
+            }
+        }
+
+        function setFillGradient(x1, y1, x2, y2)
+        {
+            var grad = ctx.createLinearGradient(x1, y1, x2, y2);
+                        grad.addColorStop(0, 'red');
+                        grad.addColorStop(1 / 6, 'orange');
+                        grad.addColorStop(2 / 6, 'yellow');
+                        grad.addColorStop(3 / 6, 'green');
+                        grad.addColorStop(4 / 6, 'aqua');
+                        grad.addColorStop(5 / 6, 'blue');
+                        grad.addColorStop(1, 'purple');
+                        fillStyle = grad;
+        }
+
+        function setFillRadialGradient(x1, y1, r1, x2, y2, r2)
+        {
+
+            var grad = ctx.createRadialGradient(x1, y1, r1, x2, y2, r2)
+                        grad.addColorStop(0, 'red');
+                        grad.addColorStop(1 / 6, 'orange');
+                        grad.addColorStop(2 / 6, 'yellow');
+                        grad.addColorStop(3 / 6, 'green');
+                        grad.addColorStop(4 / 6, 'aqua');
+                        grad.addColorStop(5 / 6, 'blue');
+                        grad.addColorStop(1, 'purple');
+                        fillStyle = grad;
+        }
+
+        function setGradient(x1, y1, x2, y2)
+        {
+            var grad = ctx.createLinearGradient(x1, y1, x2, y2);
+                        grad.addColorStop(0, 'red');
+                        grad.addColorStop(1 / 6, 'orange');
+                        grad.addColorStop(2 / 6, 'yellow');
+                        grad.addColorStop(3 / 6, 'green');
+                        grad.addColorStop(4 / 6, 'aqua');
+                        grad.addColorStop(5 / 6, 'blue');
+                        grad.addColorStop(1, 'purple');
+                        strokeStyle = grad;
+        }
+
+        function setRadialGradient(x1, y1, r1, x2, y2, r2)
+        {
+            var grad = ctx.createRadialGradient(x1, y1, r1, x2, y2, r2);;
+                        grad.addColorStop(0, 'red');
+                        grad.addColorStop(1 / 6, 'orange');
+                        grad.addColorStop(2 / 6, 'yellow');
+                        grad.addColorStop(3 / 6, 'green');
+                        grad.addColorStop(4 / 6, 'aqua');
+                        grad.addColorStop(5 / 6, 'blue');
+                        grad.addColorStop(1, 'purple');
+                        strokeStyle = grad;
+        }
+
+        // UTILITY FUNCTIONS
+        /*
+        These utility functions do not depend on any global variables being in existence, 
+        and produce no "side effects" such as changing ctx state variables.
+        They are "pure functions" - see: http://en.wikipedia.org/wiki/Pure_function
+        */
+
+        // Function Name: getMouse()
+        // returns mouse position in local coordinate system of element
+        // Author: Tony Jefferson
+        // Last update: 3/1/2014
+        function getMouse(e){
+            var mouse = {}
+            mouse.x = e.pageX - e.target.offsetLeft;
+            mouse.y = e.pageY - e.target.offsetTop;
+            return mouse;
+        }
+
+        /*
+        Function Name: drawGrid()
+        Description: Fills the entire canvas with a grid
+        Last update: 9/1/2014
+        */
+        function drawGrid(ctx, color, cellWidth, cellHeight){
+            // save the current drawing state as it existed before this function was called
+            ctx.save()
+
+            // set some drawing state variables
+            ctx.strokeStyle = color;
+            ctx.fillStyle = '#ffffff';
+            ctx.lineWidth = 0.5;
+            ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+            // vertical lines all set!
+            for (var x = cellWidth + 0.5; x < ctx.canvas.width; x += cellWidth) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, ctx.canvas.height);
+                ctx.stroke();
+            }
+
+            // horizontal lines
+            for (var y = cellHeight + 0.5; y < ctx.canvas.height; y += cellHeight)
+            {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(ctx.canvas.width, y);
+                ctx.stroke();
+            }
+
+
+            // restore the drawing state
+            ctx.restore();
+        }
+    </script>
+  <style>
+      body {
+         background: #eeeeee;
+         font-family: tahoma, verdana, sans serif;
+      }
+
+      #mainCanvas {
+         background: #ffffff;
+         position:absolute;
+         z-index: 0;
+         left: 10px;
+         top: 10px;
+         box-shadow: 4px 4px 8px rgba(0,0,0,0.5);
+      }
+      
+      
+       #controls {
+         position: absolute;
+          z-index: 2;
+         left: 25px;
+         top: 25px;
+      }
+      
+      label{
+      	font-size: 12px;
+      	margin-right:0.75em;
+      }
+      
+    </style>
+</head>
+<body>  
+  <canvas id="topCanvas" width="700" height="500">
+	Get a real browser!
+	</canvas>
+	<canvas id="mainCanvas" width="700" height="500">
+	Get a real browser!
+	</canvas>
+	
+	
+	<style>#topCanvas
+	{
+		background: rgba(0,0,0,0);
+		position:absolute;
+		left: 10px;
+		top: 10px;
+		z-index: 1;
+		cursor: pointer;
+	} </style>
+	
+	<div id="controls">
+		<label>Tool:
+			<select id="toolChooser">
+				<option value="toolPencil">Pencil</option>
+				<option value="toolRectangle">Rectangle</option>
+				<option value="toolLine">Line</option>
+    		</select>
+    	</label>
+		
+		<label>Stroke Color:
+			<select id="strokeStyleChooser">
+				<option value="Red">Red</option>
+				<option value="Orange">Orange</option>
+				<option value="Yellow">Yellow</option>
+				<option value="Green">Green</option>
+				<option value="Blue">Blue</option>
+				<option value="Purple">Purple</option>
+				<option value="Black" selected>Black</option>
+				<option value="Gradient">Gradient</option>
+				<option value="Radial Gradient">Radial Gradient</option>
+			</select>
+		</label>
+    	
+    	<label>Line Width: 
+			<select id="lineWidthChooser">
+				<option value="1">1</option>
+				<option value="2">2</option>
+        		<option value="3" selected>3</option>
+        		<option value="4">4</option>
+				<option value="5">5</option>
+        		<option value="6">6</option>
+        		<option value="7">7</option>
+				<option value="8">8</option>
+        		<option value="9">9</option>
+        		<option value="10">10</option>
+    		</select>
+    	</label>
+    	
+		<label>Fill Color:
+			<select id="fillColorChooser">
+				<option value="Alphazero" selected>No Fill</option>
+				<option value="Red">Red</option>
+				<option value="Orange">Orange</option>
+				<option value="Yellow">Yellow</option>
+				<option value="Green">Green</option>
+				<option value="Blue">Blue</option>
+				<option value="Purple">Purple</option>
+				<option value="Black">Black</option>
+				<option value="White">White</option>
+				<option value="Gradient">Gradient</option>
+				<option value="Radial Gradient">Radial Gradient</option>
+			</select>
+		</label>
+    	
+    	<span><input id="clearButton" type="button" value="Clear"/></span>
+    	<span><input id="exportButton" type="button" value="Export"/></span>
+    </div>
+</body>
+</html>
